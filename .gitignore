@@ -1,0 +1,43 @@
+# OS-specific
+.DS_Store
+Thumbs.db
+
+# SEGGER Embedded Studio (SES) build files
+*.emSession
+*.emProject.user
+*.emSolution.user
+*.jlink
+*.jlinksettings
+*.out
+*.map
+*.lst
+*.hex
+*.bin
+
+# Build output folders
+Output/
+Debug/
+Release/
+obj/
+*.o
+
+# Logs and temporary files
+*.log
+*.tmp
+*.bak
+*.swp
+
+# nRF5 SDK specific
+__build/
+_build/
+*.d
+
+# CMake (if used in project)
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+
+# VSCode or other editors (if used alongside SES)
+.vscode/
+.idea/
