@@ -24,10 +24,9 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-//#include "api_ab_uart.h"
-//#include "firmware_defaults.h"
-//#include "unit_testing.h"
-//#include "common_status.h"
+#include "boards_custom.h"
+
+
 
 typedef struct
 {
@@ -44,6 +43,9 @@ typedef struct
     uint16_t timeMinutes;                     /*time Minutes*/
     uint16_t timeSeconds;                     /*time Seconds*/
 
+
+    float speed_knots;
+    float course_deg;
 
     float heightOfGeoid;
     float altitude;
@@ -63,12 +65,12 @@ typedef struct
 
 }gps_packet_t;
 
-typedef enum {
+/*typedef enum {
     fail = 0,
     success = 1,
     pending = 2
 } status_t;
-
+*/
 
 
 typedef struct {
@@ -136,6 +138,21 @@ status_t gps_check_communication();
 
 void gps_init(void);
 
+
+
+
+
+
+bool gps_service(void);
+bool gps_get_fix(gps_packet_t *out);
+
+static uint8_t hex_nibble(char c);
+
+static bool nmea_checksum_ok(const char *s);
+
+ extern void log_fix(const gps_packet_t *fix);
+
+void gps_debug_raw(void);
 
 #endif
 

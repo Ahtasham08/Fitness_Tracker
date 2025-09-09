@@ -3443,7 +3443,7 @@
 // <e> NRFX_SAADC_ENABLED - nrfx_saadc - SAADC peripheral driver
 //==========================================================
 #ifndef NRFX_SAADC_ENABLED
-#define NRFX_SAADC_ENABLED 0
+#define NRFX_SAADC_ENABLED 1
 #endif
 // <o> NRFX_SAADC_CONFIG_RESOLUTION  - Resolution
  
@@ -3453,7 +3453,7 @@
 // <3=> 14 bit 
 
 #ifndef NRFX_SAADC_CONFIG_RESOLUTION
-#define NRFX_SAADC_CONFIG_RESOLUTION 1
+#define NRFX_SAADC_CONFIG_RESOLUTION 2
 #endif
 
 // <o> NRFX_SAADC_CONFIG_OVERSAMPLE  - Sample period
@@ -4132,20 +4132,20 @@
 // <e> NRFX_TWIM_ENABLED - nrfx_twim - TWIM peripheral driver
 //==========================================================
 #ifndef NRFX_TWIM_ENABLED
-#define NRFX_TWIM_ENABLED 0
+#define NRFX_TWIM_ENABLED 1
 #endif
 // <q> NRFX_TWIM0_ENABLED  - Enable TWIM0 instance
  
 
 #ifndef NRFX_TWIM0_ENABLED
-#define NRFX_TWIM0_ENABLED 0
+#define NRFX_TWIM0_ENABLED 1
 #endif
 
 // <q> NRFX_TWIM1_ENABLED  - Enable TWIM1 instance
  
 
 #ifndef NRFX_TWIM1_ENABLED
-#define NRFX_TWIM1_ENABLED 0
+#define NRFX_TWIM1_ENABLED 1
 #endif
 
 // <o> NRFX_TWIM_DEFAULT_CONFIG_FREQUENCY  - Frequency
@@ -5501,9 +5501,9 @@
 
 // <e> SAADC_ENABLED - nrf_drv_saadc - SAADC peripheral driver - legacy layer
 //==========================================================
-#ifndef SAADC_ENABLED
-#define SAADC_ENABLED 0
-#endif
+//#ifndef SAADC_ENABLED
+//#define SAADC_ENABLED 0
+//#endif
 // <o> SAADC_CONFIG_RESOLUTION  - Resolution
  
 // <0=> 8 bit 
@@ -5896,9 +5896,9 @@
 
 // <e> TWI_ENABLED - nrf_drv_twi - TWI/TWIM peripheral driver - legacy layer
 //==========================================================
-#ifndef TWI_ENABLED
-#define TWI_ENABLED 0
-#endif
+//#ifndef TWI_ENABLED
+//#define TWI_ENABLED 0
+//#endif
 // <o> TWI_DEFAULT_CONFIG_FREQUENCY  - Frequency
  
 // <26738688=> 100k 
@@ -7316,7 +7316,7 @@
 // <e> NRF_PWR_MGMT_ENABLED - nrf_pwr_mgmt - Power management module
 //==========================================================
 #ifndef NRF_PWR_MGMT_ENABLED
-#define NRF_PWR_MGMT_ENABLED 1
+#define NRF_PWR_MGMT_ENABLED 0 //disabless for now chnaged here
 #endif
 // <e> NRF_PWR_MGMT_CONFIG_DEBUG_PIN_ENABLED - Enables pin debug in the module.
 
@@ -7749,7 +7749,7 @@
 // <e> NRF_LOG_BACKEND_UART_ENABLED - nrf_log_backend_uart - Log UART backend
 //==========================================================
 #ifndef NRF_LOG_BACKEND_UART_ENABLED
-#define NRF_LOG_BACKEND_UART_ENABLED 1
+#define NRF_LOG_BACKEND_UART_ENABLED 0
 #endif
 // <o> NRF_LOG_BACKEND_UART_TX_PIN - UART TX pin 
 #ifndef NRF_LOG_BACKEND_UART_TX_PIN
@@ -7907,7 +7907,7 @@
 // <1024=> 1024 
 
 #ifndef NRF_LOG_STR_PUSH_BUFFER_SIZE
-#define NRF_LOG_STR_PUSH_BUFFER_SIZE 128
+#define NRF_LOG_STR_PUSH_BUFFER_SIZE 256
 #endif
 
 // <o> NRF_LOG_STR_PUSH_BUFFER_SIZE  - Size of the buffer dedicated for strings stored using @ref NRF_LOG_PUSH.

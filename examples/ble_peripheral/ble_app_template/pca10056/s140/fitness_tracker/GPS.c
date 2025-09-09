@@ -66,76 +66,402 @@
 #include <time.h>
 
 
+#define LOG_SHIM_TX_PIN  NRF_GPIO_PIN_MAP(0,6)   // CH340 RXD wire here
+#define LOG_SHIM_BAUD    9600
+#include "log_softuart_shim.h"            // redirects NRF_LOG_* → SoftUART
+// +++ END ADD +++
+
+// ---------- helpers ----------
+
+
+// Debug: print the last raw NMEA sentence
+void gps_debug_raw(void) {
+    if (!line_ready) return;   // nothing new
+    line_ready = false;        // consume
+
+    char raw[256];
+    strncpy(raw, (char*)line_buf, sizeof(raw)-1);
+    raw[sizeof(raw)-1] = 0;
+
+    NRF_LOG_INFO("RAW GPS: %s", nrf_log_push(raw));
+}
+
+
+static int split_csv(char *s, char *tok[], int max_tok) {
+    int n = 0;
+    for (char *p = strtok(s, ","); p && n < max_tok; p = strtok(NULL, ",")) tok[n++] = p;
+    return n;
+}
+
+static double dm_to_deg(const char *dm, char hemi) {
+    if (!dm || !*dm) return 0.0;
+    double v = atof(dm);
+    int deg = (int)(v / 100.0);
+    double minutes = v - deg * 100.0;
+    double out = deg + minutes / 60.0;
+    if (hemi == 'S' || hemi == 's' || hemi == 'W' || hemi == 'w') out = -out;
+    return out;
+}
+
+static bool is_type(const char *s, const char *type3) {
+    // Accept any talker prefix (GP/GN/GA/GB/...); check chars 3..5
+    return (s && type3 && strncmp(s + 3, type3, 3) == 0);
+}
+
+
+
+
+
+// --- DMS helpers (no libm needed) ---
+static inline long double _absld(long double x){ return (x < 0) ? -x : x; }
+
+uint8_t gps_get_dms_degrees(long double dd) {
+    long double v = _absld(dd);
+    return (uint8_t)v; // trunc toward zero is fine since v >= 0
+}
+
+uint8_t gps_get_dms_minutes(long double dd) {
+    long double v = _absld(dd);
+    uint8_t deg = (uint8_t)v;
+    long double frac_deg = v - (long double)deg;
+    return (uint8_t)(frac_deg * 60.0L); // trunc is floor for positive
+}
+
+uint8_t gps_get_dms_seconds(long double dd) {
+    long double v = _absld(dd);
+    uint8_t deg = (uint8_t)v;
+    long double frac_deg = v - (long double)deg;
+    long double total_min = frac_deg * 60.0L;
+    uint8_t min = (uint8_t)total_min;
+    long double frac_min = total_min - (long double)min;
+    uint8_t sec = (uint8_t)(frac_min * 60.0L + 0.5L); // round to nearest
+    if (sec == 60) sec = 59; // clamp
+    return sec;
+}
+
+// Convenience: compute D/M/S + hemisphere in one go
+void gps_decimal_to_dms(long double dd,
+                        uint8_t *D, uint8_t *M, uint8_t *S,
+                        char *hem, char posHem, char negHem) {
+    char h = (dd >= 0) ? posHem : negHem;
+    long double v = (dd >= 0) ? dd : -dd;
+
+    uint8_t d = (uint8_t)v;
+    long double rem = (v - (long double)d) * 60.0L;
+    uint8_t m = (uint8_t)rem;
+    uint8_t s = (uint8_t)((rem - (long double)m) * 60.0L + 0.5L);
+
+    if (s == 60) { s = 0; m++; }
+    if (m == 60) { m = 0; d++; }
+
+    if (D) *D = d; if (M) *M = m; if (S) *S = s; if (hem) *hem = h;
+}
+
+
+
+// ---------- working state we’ll merge into my_gps_data ----------
+typedef struct {
+    bool   rmc_valid;
+    double lat_deg;
+    double lon_deg;
+    char   lat_hem;
+    char   lon_hem;
+    float  speed_kn;
+    float  cog_deg;
+    int    fix_quality;
+    int    sats;
+    float  hdop;
+    float  alt_m;
+    uint16_t hh, mm, ss;      // add time
+    uint32_t t_rmc_ms;
+    uint32_t t_gga_ms;
+} gps_work_t;
+
+
+static gps_work_t gw = {0};
+
+// app timer ticks → ms (adjust if you prefer another timebase)
+static uint32_t now_ms(void) {
+    // Convert RTC ticks to ms assuming 32.768 kHz; replace with your utility if you have one
+    uint32_t ticks = app_timer_cnt_get();
+    // Avoid float here; simple scale for RTC at 32768 Hz:
+    return (uint32_t)((ticks * 1000ULL) / 32768ULL);
+}
+
+// parse $--RMC (time/valid/position/speed/cog/date)
+static bool parse_rmc_line(char *line) {
+    char buf[256]; strncpy(buf, line, sizeof(buf)-1); buf[255] = 0;
+    char *t[16] = {0}; int n = split_csv(buf, t, 16);
+    if (n < 10) return false;
+
+    // time hhmmss
+    if (t[1] && strlen(t[1]) >= 6) {
+        gw.hh = (t[1][0]-'0')*10 + (t[1][1]-'0');
+        gw.mm = (t[1][2]-'0')*10 + (t[1][3]-'0');
+        gw.ss = (t[1][4]-'0')*10 + (t[1][5]-'0');
+    }
+
+    gw.rmc_valid = (t[2] && t[2][0] == 'A');
+    if (gw.rmc_valid) {
+        gw.lat_deg = dm_to_deg(t[3], t[4] ? t[4][0] : 'N');
+        gw.lon_deg = dm_to_deg(t[5], t[6] ? t[6][0] : 'E');
+        gw.lat_hem = t[4] ? t[4][0] : 'N';
+        gw.lon_hem = t[6] ? t[6][0] : 'E';
+        gw.speed_kn = t[7] ? (float)atof(t[7]) : 0.f;
+        gw.cog_deg  = t[8] ? (float)atof(t[8]) : 0.f;
+    }
+    gw.t_rmc_ms = now_ms();
+    return true;
+}
+
+// parse $--GGA (fix quality/sats/hdop/alt)
+static bool parse_gga_line(char *line) {
+    char buf[256]; strncpy(buf, line, sizeof(buf)-1); buf[255] = 0;
+    char *t[16] = {0}; int n = split_csv(buf, t, 16);
+    // $--GGA,time,lat,N,lon,E,6fix,7sats,8hdop,9alt,M,geoid,...
+    if (n < 10) return false;
+
+    gw.fix_quality = (t[6] && *t[6]) ? atoi(t[6]) : 0;
+    gw.sats        = (t[7] && *t[7]) ? atoi(t[7]) : 0;
+    gw.hdop        = (t[8] && *t[8]) ? (float)atof(t[8]) : 99.f;
+    gw.alt_m       = (t[9] && *t[9]) ? (float)atof(t[9]) : 0.f;
+
+    gw.t_gga_ms = now_ms();
+    return true;
+}
+
+
+
+// decide when we have a coherent fix (fresh RMC + GGA, good quality)
+static bool fix_complete(void) {
+    uint32_t t = now_ms();
+    bool fresh_rmc = (t - gw.t_rmc_ms) < 1500;  // ~1.5 s window at 1 Hz
+    bool fresh_gga = (t - gw.t_gga_ms) < 1500;
+    return gw.rmc_valid && (gw.fix_quality > 0) && fresh_rmc && fresh_gga;
+}
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /* GPS UART instance */
 static const nrfx_uarte_t GPS_UART = NRFX_UARTE_INSTANCE(1);
 
-#define GPS_RX_BUF_SIZE 256
-static uint8_t gps_rx_buf[GPS_RX_BUF_SIZE];
-gps_packet_t my_gps_data;
+gps_packet_t my_gps_data = {0};   // <-- provide the definitio
 
- uint8_t line_buf[256];
-static size_t line_idx = 0;
+#define GPS_RX_BUF_SIZE 256
+// existing globals you already have:
+static uint8_t gps_rx_buf[GPS_RX_BUF_SIZE];   // 256
+uint8_t  line_buf[256];
 volatile bool line_ready = false;
+static size_t line_idx = 0;
+static bool in_sentence = false;
 
 static void gps_uarte_event_handler(nrfx_uarte_event_t const * p_event, void * p_context)
 {
     switch (p_event->type)
     {
-        case NRFX_UARTE_EVT_RX_DONE:
-          // Null-terminate and log
+    case NRFX_UARTE_EVT_RX_DONE:
+        // iterate the bytes that just arrived in gps_rx_buf
+        for (size_t i = 0; i < p_event->data.rxtx.bytes; i++) {
+            uint8_t c = gps_rx_buf[i];
 
-
-            if (p_event->data.rxtx.bytes < GPS_RX_BUF_SIZE)
-                gps_rx_buf[p_event->data.rxtx.bytes] = '\0';
-            NRF_LOG_INFO("%s", (uint32_t)gps_rx_buf);
-
-            // Re-start reception for next data
-            APP_ERROR_CHECK(nrfx_uarte_rx(&GPS_UART, gps_rx_buf, GPS_RX_BUF_SIZE));
-            break;
-
- /*
-  
-        for (size_t i = 0; i < p_event->data.rxtx.bytes; i++)
-        {
-            char c = line_buf[i];
-
-            if (c == '\n')   // end of sentence
-            {
-                line_buf[line_idx] = '\0';   // null-terminate
+            if (c == '$') {                   // start of a sentence
+                in_sentence = true;
                 line_idx = 0;
-                line_ready = true;
+                line_buf[line_idx++] = c;
+                continue;
             }
-            else
-            {
-                if (line_idx < GPS_RX_BUF_SIZE - 1)
-                {
-                    line_buf[line_idx++] = c;
-                }
-                else
-                {
-                    // overflow → reset
-                    line_idx = 0;
-                }
+            if (!in_sentence) continue;       // ignore noise (e.g., "<info> ...") until '$'
+
+            if (c == '\r') continue;          // skip CR
+            if (c == '\n') {                  // end of sentence
+                line_buf[(line_idx < sizeof(line_buf)) ? line_idx : sizeof(line_buf)-1] = 0;
+                line_ready = true;            // hand to driver-level parser
+                in_sentence = false;
+                continue;
             }
+            if (line_idx < sizeof(line_buf)-1) line_buf[line_idx++] = c;
+            else { in_sentence = false; line_idx = 0; } // overflow, resync
         }
 
-        // restart reception
-        APP_ERROR_CHECK(nrfx_uarte_rx(&GPS_UART, line_buf, sizeof(line_buf)));
-    break;
+        // re-start reception for next chunk (same buffer & size as your code)
+        APP_ERROR_CHECK(nrfx_uarte_rx(&GPS_UART, gps_rx_buf, sizeof(gps_rx_buf)-1));
+        break;
 
-    */
+    case NRFX_UARTE_EVT_ERROR:
+        // Clear errors and restart reception
+        APP_ERROR_CHECK(nrfx_uarte_rx(&GPS_UART, gps_rx_buf, sizeof(gps_rx_buf)-1));
+        break;
 
-        case NRFX_UARTE_EVT_ERROR:
-            NRF_LOG_ERROR("GPS UART error: 0x%08x", p_event->data.error.error_mask);
-            // Clear errors and restart reception
-            APP_ERROR_CHECK(nrfx_uarte_rx(&GPS_UART, gps_rx_buf, GPS_RX_BUF_SIZE));
-            break;
-
-        default:
-            break;
+    default:
+        break;
     }
 }
+
+
+
+
+
+static bool fix_ready = false;
+
+// --- put near the top of GPS.c ---
+static uint8_t hex_nibble(char c) {
+    if (c >= '0' && c <= '9') return (uint8_t)(c - '0');
+    c = (char)(c & ~0x20);                 // to upper-case
+    if (c >= 'A' && c <= 'F') return (uint8_t)(c - 'A' + 10);
+    return 0xFF;                           // invalid
+}
+
+static bool nmea_checksum_ok(const char *s) {
+    if (!s || s[0] != '$') return false;
+    const char *ast = strrchr(s, '*');
+    if (!ast || !ast[1] || !ast[2]) return false;
+
+    uint8_t cs = 0;
+    for (const char *p = s + 1; p < ast; ++p) cs ^= (uint8_t)*p;
+
+    uint8_t hi = hex_nibble(ast[1]);
+    uint8_t lo = hex_nibble(ast[2]);
+    if (hi == 0xFF || lo == 0xFF) return false;
+    return cs == (uint8_t)((hi << 4) | lo);
+}
+
+
+
+bool gps_service(void)
+{
+    if (!line_ready) return false;
+
+    char s[256];
+    strncpy(s, (char*)line_buf, sizeof(s)-1);
+    s[sizeof(s)-1] = 0;
+    line_ready = false;  // clear after copying to avoid races
+
+    if (!nmea_checksum_ok(s)) {
+        return false;
+    }
+
+    NRF_LOG_DEBUG("%s", nrf_log_push(s));
+
+
+    if (is_type(s, "RMC")) {
+        parse_rmc_line(s);
+    } else if (is_type(s, "GGA")) {
+        parse_gga_line(s);
+    } else {
+        return false; // ignore others
+    }
+
+    if (fix_complete()) {
+        my_gps_data.isValid       = true;
+        my_gps_data.lat           = (long double)gw.lat_deg;
+        my_gps_data.lon           = (long double)gw.lon_deg;
+        my_gps_data.lathem        = (gw.lat_deg >= 0) ? 'N' : 'S';
+        my_gps_data.lonhem        = (gw.lon_deg >= 0) ? 'E' : 'W';
+        my_gps_data.altitude      = gw.alt_m;
+        my_gps_data.numSatellites = (uint8_t)gw.sats;
+        my_gps_data.fixQuality    = (uint8_t)gw.fix_quality;
+        my_gps_data.valid_data    = (uint8_t)(gw.fix_quality > 0);
+        my_gps_data.timeHours     = gw.hh;
+        my_gps_data.timeMinutes   = gw.mm;
+        my_gps_data.timeSeconds   = gw.ss;
+        my_gps_data.horizontalDilution = gw.hdop;
+        // my_gps_data.heightOfGeoid = gw.geoid_m; // if you added it
+
+        // DMS + hemisphere fields
+        uint8_t d,m,ssec; char hem;
+        gps_decimal_to_dms(my_gps_data.lat, &d,&m,&ssec, &hem, 'N','S');
+        my_gps_data.lat_degrees = d;
+        my_gps_data.lat_minutes = m;
+        my_gps_data.lat_seconds = ssec;
+        my_gps_data.lathem      = (uint8_t)hem;
+
+        gps_decimal_to_dms(my_gps_data.lon, &d,&m,&ssec, &hem, 'E','W');
+        my_gps_data.long_degrees = d;
+        my_gps_data.long_minutes = m;
+        my_gps_data.long_seconds = ssec;
+        my_gps_data.lonhem       = (uint8_t)hem;
+
+        // If you extended gps_packet_t
+        // my_gps_data.speed_knots = gw.speed_kn;
+        // my_gps_data.course_deg  = gw.cog_deg;
+
+        fix_ready = true;
+        return true;
+    }
+
+    return false;
+}
+
+
+
+
+
+// Optional helper: copy out last good fix
+bool gps_get_fix(gps_packet_t *out)
+{
+    if (!fix_ready || !out) return false;
+    *out = my_gps_data;
+    fix_ready = false; // consume
+    return true;
+}
+
+
+
+
+
+
+
+
+
+
+// ---------- Helper to print a fix with only integer formatting ----------
+void log_fix(const gps_packet_t *fix)
+{
+    int32_t lat_u = (int32_t)(fix->lat * 1000000.0L);
+    int32_t lon_u = (int32_t)(fix->lon * 1000000.0L);
+    int32_t alt_cm = (int32_t)(fix->altitude * 100.0f);
+    uint32_t hdop_centi = (uint32_t)(fix->horizontalDilution * 100.0f);
+
+    char line[160];
+
+    // Line 1
+    snprintf(line, sizeof(line),
+             "GPS FIX %02u:%02u:%02uZ lat=%ld.%06lu%c lon=%ld.%06lu%c alt=%ld.%02lu m",
+             (unsigned)fix->timeHours, (unsigned)fix->timeMinutes, (unsigned)fix->timeSeconds,
+             (long)(lat_u/1000000), (unsigned long)((lat_u<0)? -((long)lat_u%1000000) : (lat_u%1000000)), (char)fix->lathem,
+             (long)(lon_u/1000000), (unsigned long)((lon_u<0)? -((long)lon_u%1000000) : (lon_u%1000000)), (char)fix->lonhem,
+             (long)(alt_cm/100),    (unsigned long)((alt_cm<0)? -((long)alt_cm%100)    : (alt_cm%100)));
+    NRF_LOG_INFO("%s", nrf_log_push(line));   // (three times, one per line)
+
+    // Line 2
+    snprintf(line, sizeof(line),
+             "sats=%u q=%u hdop=%lu.%02lu",
+             (unsigned)fix->numSatellites,
+             (unsigned)fix->fixQuality,
+             (unsigned long)(hdop_centi/100), (unsigned long)(hdop_centi%100));
+   NRF_LOG_INFO("%s", nrf_log_push(line));   // (three times, one per line)
+
+    // Line 3 (DMS)
+      // Line 3 (DMS, ASCII only — "deg" instead of '°')
+      snprintf(line, sizeof(line),
+               "DMS lat=%u deg %u' %u\"%c  lon=%u deg %u' %u\"%c",
+               (unsigned)fix->lat_degrees,  (unsigned)fix->lat_minutes,  (unsigned)fix->lat_seconds,  (char)fix->lathem,
+               (unsigned)fix->long_degrees, (unsigned)fix->long_minutes, (unsigned)fix->long_seconds, (char)fix->lonhem);
+      NRF_LOG_INFO("%s", nrf_log_push(line));
+
+}
+
 
 /* GPS GPIO init */
 static void gps_gpio_init(void)
@@ -180,6 +506,16 @@ void gps_init(void)
     gps_uarte_init();
    // NRF_LOG_INFO("GPS Initialized");
 }
+
+
+
+
+
+
+
+
+
+
 
 
 ///////////////////////////////////////////////////////////////////////////////
@@ -1099,20 +1435,10 @@ void gps_convert_decimal_deg_dms(uint8_t* degrees, uint8_t* minutes, uint8_t* se
     *seconds = val * 60;
 }
 
-uint8_t gps_get_dms_degrees(long double decimal_degrees)
-{
-    return (uint8_t) (decimal_degrees);
-}
 
-uint8_t gps_get_dms_minutes(long double decimal_degrees)
-{
-    return (uint8_t)((decimal_degrees - get_dms_degrees(decimal_degrees))*60);
-}
 
-uint8_t gps_get_dms_seconds(long double decimal_degrees)
-{
-    return (uint8_t)((((decimal_degrees - get_dms_degrees(decimal_degrees))*60) - get_dms_minutes(decimal_degrees))*60);
-}
+
+
 
 status_t gps_check_communication()
 {

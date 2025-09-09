@@ -51,66 +51,75 @@
  * with 'YOUR_JOB' indicates where and how you can customize.
  */
 
-
 #include "sdk_config.h"
+#include "nrfx.h"
+#include "nrfx_twim.h"
 #include "nrfx_uarte.h"
 
-
+// ---- C stdlib
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
 
+// ---- nRF / SoftDevice / BLE framework
 #include "nordic_common.h"
 #include "nrf.h"
 #include "app_error.h"
+#include "app_timer.h"
+#include "nrf_sdh.h"
+#include "nrf_sdh_soc.h"
+#include "nrf_sdh_ble.h"
 #include "ble.h"
 #include "ble_hci.h"
 #include "ble_srv_common.h"
 #include "ble_advdata.h"
 #include "ble_advertising.h"
 #include "ble_conn_params.h"
-#include "nrf_sdh.h"
-#include "nrf_sdh_soc.h"
-#include "nrf_sdh_ble.h"
-#include "app_timer.h"
+#include "ble_conn_state.h"
+#include "nrf_ble_gatt.h"
+#include "nrf_ble_qwr.h"
+#include "nrf_pwr_mgmt.h"
 #include "fds.h"
 #include "peer_manager.h"
 #include "peer_manager_handler.h"
 #include "bsp_btn_ble.h"
 #include "sensorsim.h"
-#include "ble_conn_state.h"
-#include "nrf_ble_gatt.h"
-#include "nrf_ble_qwr.h"
-#include "nrf_pwr_mgmt.h"
 
+// ---- Logging (enable in sdk_config if you use it)
 #include "nrf_log.h"
 #include "nrf_log_ctrl.h"
 #include "nrf_log_default_backends.h"
 
 
+// +++ ADD THESE 3 LINES +++
+#include "nrf_gpio.h"                     // for NRF_GPIO_PIN_MAP()
+#define LOG_SHIM_TX_PIN  NRF_GPIO_PIN_MAP(0,6)   // CH340 RXD wire here
+#define LOG_SHIM_BAUD    9600
+#include "log_softuart_shim.h"            // redirects NRF_LOG_* → SoftUART
+// +++ END ADD +++
 
-#include "nrf_gpio.h"
-#include "app_timer.h"
-#include "app_error.h"
-#include "nrf_delay.h"    // optional if you use delay
 
 
-
+// ---- GPIO / delays
 #include "nrf_gpio.h"
 #include "nrf_delay.h"
 
-
+// ---- App headers
 #include "GPS.h"
-#include "nrf_log.h"
-#include "nrf_log_ctrl.h"
+#include "i2c.h"
+#include "lis3dh.h"
+#include "adc_battery.h"
+#include "max30102.h"
+#include "m95.h"
 
 
-#define LED_PIN 20  // Or any pin you want
+
+#define LED_PIN 13  // Or any pin you want
 
 
 
 void gpio_init(void) {
-    nrf_gpio_cfg_output(LED_PIN);
+   // nrf_gpio_cfg_output(LED_PIN);
 }
 
 
@@ -121,12 +130,102 @@ static void blinky_timeout_handler(void * p_context) {
 }
 
 
+static const nrfx_twim_t m_twim0 = NRFX_TWIM_INSTANCE(0);
+
+#define I2C_SCL_PIN 26   // your SCL
+#define I2C_SDA_PIN 27   // your SDA
+
+static void twim_init(void)
+{
+    nrfx_twim_config_t config = {
+        .scl                = I2C_SCL_PIN,
+        .sda                = I2C_SDA_PIN,
+        .frequency          = NRF_TWIM_FREQ_100K,
+        .interrupt_priority = NRFX_TWIM_DEFAULT_CONFIG_IRQ_PRIORITY,
+        .hold_bus_uninit    = false
+    };
+    APP_ERROR_CHECK(nrfx_twim_init(&m_twim0, &config, NULL, NULL));
+    nrfx_twim_enable(&m_twim0);
+}
+
+
+static void i2c_scan(void)
+{
+    for (uint8_t addr = 0x08; addr <= 0x77; addr++)
+    {
+        // Zero-length write = probe
+        nrfx_err_t err = nrfx_twim_tx(&m_twim0, addr, NULL, 0, false);
+        if (err == NRFX_SUCCESS)
+        {
+            NRF_LOG_INFO("Found device at 0x%02X", addr);
+            NRF_LOG_FLUSH();   // force print immediately
+        }
+        nrf_delay_ms(5);
+    }
+}
+
+
+static bool i2c_read_reg(uint8_t addr7, uint8_t reg, uint8_t *val)
+{
+    nrfx_err_t err;
+    // Write register address, then repeated-start read 1 byte
+    err = nrfx_twim_tx(&m_twim0, addr7, &reg, 1, true);  // no STOP
+    if (err != NRFX_SUCCESS) return false;
+    err = nrfx_twim_rx(&m_twim0, addr7, val, 1);
+    return (err == NRFX_SUCCESS);
+}
+
+static void lis3dh_whoami_probe(void)
+{
+    uint8_t who = 0;
+    const uint8_t addrs[] = { 0x18, 0x19 }; // SA0 low / high
+
+    for (size_t i = 0; i < sizeof(addrs); i++) {
+        bool ok = i2c_read_reg(addrs[i], 0x0F, &who); // WHO_AM_I register
+        if (ok) {
+            NRF_LOG_INFO("LIS3DHTR at 0x%02X WHO_AM_I=0x%02X", addrs[i], who);
+            NRF_LOG_FLUSH();
+        } else {
+            NRF_LOG_INFO("No ACK from 0x%02X (WHO_AM_I)", addrs[i]);
+            NRF_LOG_FLUSH();
+        }
+        nrf_delay_ms(5);
+    }
+}
+
+
+////////////////////////////////////////////////////HR
 
 
 
-////////////////////////////////////////////////////GPS
+static void hr_service(max30102_t* dev)
+{
+    (void)max30102_clear_interrupts(dev);
+
+    uint8_t n = max30102_fifo_sample_count(dev);
+    if (!n) return;
+
+    for (uint8_t i = 0; i < n; i++) {
+        max30102_sample_t s;
+        if (max30102_read_fifo_sample(dev, &s) != NRF_SUCCESS) break;
+
+        uint16_t bpm;
+        if (max30102_bpm_update(dev, s.ir, 0, &bpm)) {
+            NRF_LOG_INFO("BPM ≈ %u", bpm);
+        }
+        if ((i & 0x03) == 0) {
+            NRF_LOG_INFO("IR=%lu RED=%lu", (unsigned long)s.ir, (unsigned long)s.red);
+        }
+    }
+}
 
 
+
+
+static inline uint32_t ms_now(void) {
+    uint32_t ticks = app_timer_cnt_get();
+    return (uint32_t)((uint64_t)ticks * 1000ull / APP_TIMER_CLOCK_FREQ);
+}
 
 ////////////////////////////////////////////////////GPS
 
@@ -726,9 +825,16 @@ static void power_management_init(void)
  */
 static void idle_state_handle(void)
 {
-    if (NRF_LOG_PROCESS() == false)
+  /*  if (NRF_LOG_PROCESS() == false) //previous
     {
-        nrf_pwr_mgmt_run();
+        nrf_pwr_mgmt_run(); 
+    }
+    */
+
+    //chaanged here
+
+     if (!NRF_LOG_PROCESS()) {
+        __WFE(); __SEV(); __WFE();   // light sleep
     }
 }
 
@@ -751,10 +857,161 @@ static void advertising_start(bool erase_bonds)
 }
 
 
+
+
+
+// put near the top of main.c
+static void m95_poll_lines(void)
+{
+    char ln[160];
+    for (;;) {
+        if (!m95_service()) break;
+        if (m95_get_line(ln, sizeof ln)) {
+            NRF_LOG_INFO("M95> %s", nrf_log_push(ln));
+        }
+    }
+}
+
+
+
+
+static void m95_gpio_bringup_once(void)
+{
+    // 0) defaults
+    nrf_gpio_cfg_output(PIN_GSM_PWR_EN);
+    nrf_gpio_cfg_output(PIN_GSM_PWRKEY);
+    nrf_gpio_cfg_output(PIN_GSM_EMERG);
+    nrf_gpio_cfg_output(PIN_GSM_DTR);
+   // before enabling the rail
+nrf_gpio_cfg_input(PIN_GSM_STATUS, NRF_GPIO_PIN_PULLUP);
+
+    nrf_gpio_pin_clear(PIN_GSM_EMERG); // do NOT emergency-off
+    nrf_gpio_pin_clear(PIN_GSM_DTR);   // keep UART awake (DTR low)
+
+    // 1) enable rail & settle
+    nrf_gpio_pin_set(PIN_GSM_PWR_EN);
+    nrf_delay_ms(1500);
+    NRF_LOG_INFO("M95: STATUS after rail = %d (LOW@MCU means ON)", nrf_gpio_pin_read(PIN_GSM_STATUS));
+
+    // 2) assert PWRKEY (MCU HIGH) for 2.0 s
+    NRF_LOG_INFO("M95: PWRKEY HIGH 2000 ms");
+    nrf_gpio_pin_set(PIN_GSM_PWRKEY);
+    nrf_delay_ms(2000);
+    nrf_gpio_pin_clear(PIN_GSM_PWRKEY);
+    NRF_LOG_INFO("M95: PWRKEY released");
+
+    // 3) wait for boot and watch STATUS flip
+    for (int i = 0; i < 60; i++) { // ~6 s total
+        int st = nrf_gpio_pin_read(PIN_GSM_STATUS);
+        NRF_LOG_INFO("M95: STATUS=%d", st);
+        nrf_delay_ms(100);
+    }
+
+    // 4) ping at 9600
+    (void)m95_send_cmd("AT");
+    // drain ~3 s to catch OK
+    uint32_t start = app_timer_cnt_get();
+    char ln[128];
+    while (((app_timer_cnt_get() - start) * 1000ULL / 32768ULL) < 3000) {
+        while (m95_service()) {
+            if (m95_get_line(ln, sizeof ln)) NRF_LOG_INFO("M95> %s", nrf_log_push(ln));
+        }
+        nrf_delay_ms(5);
+    }
+}
+
+
+static void print_reset_reason(void){
+    uint32_t r = NRF_POWER->RESETREAS;
+    NRF_LOG_INFO("RESETREAS=0x%08lx", (unsigned long)r);
+    NRF_POWER->RESETREAS = r; // clear for next time
+}
+
+
+
+
+
+
+
+
+static bool cmd_expect(const char *cmd, const char *must_see, uint32_t timeout_ms);
+static void drain_logs(uint32_t ms);
+
+void app_start(void)
+{
+    m95_init();
+
+    if (!m95_power_on()) {
+        NRF_LOG_ERROR("M95: power-on failed");
+        return;
+    }
+
+    // Catch any boot spew
+    drain_logs(400);
+
+    // Basic sanity + make responses predictable
+    (void)cmd_expect("AT",     NULL,   800);
+    (void)cmd_expect("ATE0",   NULL,   800);   // echo off
+    (void)cmd_expect("ATI",    NULL,  1500);   // module ID + OK
+    (void)cmd_expect("AT+IPR?",NULL,  1000);   // confirm baud
+
+    // SIM / RF / Registration
+    (void)cmd_expect("AT+CMEE=2", NULL, 800);  // verbose errors
+    (void)cmd_expect("AT+CPIN?",  "CPIN:", 1500); // expect "CPIN: READY" then OK
+    (void)cmd_expect("AT+CSQ",    "CSQ:", 1500);  // signal (0..31 or 99)
+    (void)cmd_expect("AT+CREG=2", NULL,  800);    // enable URC +CREG: <stat>
+    (void)cmd_expect("AT+CREG?",  "CREG:", 2000); // expect +CREG: 0,1 or 0,5 then OK
+    (void)cmd_expect("AT+COPS?",  "+COPS:", 2000);// serving operator
+
+    // (Optional) SMS ping to prove TX/RX fully:
+    // (void)cmd_expect("AT+CMGF=1", NULL,  800); // text mode
+    // then handle CMGS flow later
+}
+
+
+
+static bool cmd_expect(const char *cmd, const char *must_see, uint32_t timeout_ms);
+static void drain_logs(uint32_t ms);
+
+void app_m95_start(void)
+{
+    m95_init();
+
+    if (!m95_power_on()) {
+        NRF_LOG_ERROR("M95: power-on failed");
+        return;
+    }
+
+    // Catch any boot spew
+    drain_logs(400);
+
+    // Basic sanity + make responses predictable
+    (void)cmd_expect("AT",     NULL,   800);
+    (void)cmd_expect("ATE0",   NULL,   800);   // echo off
+    (void)cmd_expect("ATI",    NULL,  1500);   // module ID + OK
+    (void)cmd_expect("AT+IPR?",NULL,  1000);   // confirm baud
+
+    // SIM / RF / Registration
+    (void)cmd_expect("AT+CMEE=2", NULL, 800);  // verbose errors
+    (void)cmd_expect("AT+CPIN?",  "CPIN:", 1500); // expect "CPIN: READY" then OK
+    (void)cmd_expect("AT+CSQ",    "CSQ:", 1500);  // signal (0..31 or 99)
+    (void)cmd_expect("AT+CREG=2", NULL,  800);    // enable URC +CREG: <stat>
+    (void)cmd_expect("AT+CREG?",  "CREG:", 2000); // expect +CREG: 0,1 or 0,5 then OK
+    (void)cmd_expect("AT+COPS?",  "+COPS:", 2000);// serving operator
+
+    // (Optional) SMS ping to prove TX/RX fully:
+    // (void)cmd_expect("AT+CMGF=1", NULL,  800); // text mode
+    // then handle CMGS flow later
+}
+
+
+
 /**@brief Function for application main entry.
  */
 int main(void)
 {
+
+ print_reset_reason();
     bool erase_bonds;
     ret_code_t err_code;   // Declare the variable here
 
@@ -762,7 +1019,7 @@ int main(void)
     log_init();
     timers_init();
     buttons_leds_init(&erase_bonds);
-    power_management_init();
+    //power_management_init(); //commenetd out for now changed here 
 
    // ble_stack_init();
    // gap_params_init();
@@ -771,6 +1028,10 @@ int main(void)
    // services_init();
    // conn_params_init();
     //peer_manager_init();
+
+
+    debug_port_init();   // SoftUART up (9600 8N1). You’ll see a banner in Docklight.
+
 
     // Start execution.
     NRF_LOG_INFO("Fitness Tracker Application started.");
@@ -791,44 +1052,233 @@ int main(void)
 
    // gps_status = gps_data_read(&my_gps_data);
 
-    if (gps_status == success)
-    {
-        NRF_LOG_INFO("GPS Fix acquired!");
-        NRF_LOG_INFO("Latitude: %f, Longitude: %f", my_gps_data.lat, my_gps_data.lon);
-        NRF_LOG_INFO("Altitude: %f", my_gps_data.altitude);
+    //twim_init();
+
+    //NRF_LOG_INFO("I2C scan start");
+   // i2c_scan();
+
+      // NRF_LOG_INFO("Probing LIS3DHTR WHO_AM_I...");
+      // NRF_LOG_FLUSH();
+
+    //lis3dh_whoami_probe(); // <-- run this
+
+       i2c0_init();
+       APP_ERROR_CHECK_BOOL(battery_adc_init());
+
+
+
+    uint8_t who = 0;
+    if (lis3dh_whoami(&who)) {
+        NRF_LOG_INFO("LIS3DHTR WHO_AM_I = 0x%02X", who); // expect 0x33
+    } else {
+        NRF_LOG_ERROR("WHO_AM_I read failed");
     }
-    else if (gps_status == fail)
-    {
-        NRF_LOG_WARNING("GPS read failed.");
+
+    if (!lis3dh_init(LIS3DH_ODR_100HZ, LIS3DH_FS_2G)) {
+        NRF_LOG_ERROR("LIS3DHTR init failed");
     }
+
+    //HR Sensor START
+    // 3) Configure sensor
+    hr_bus_init();
+
+
+
+
+
+    // 2) Init the sensor (no GPIOTE)
+// --- MAX30102 init (no GPIOTE) ---
+        max30102_t hr;
+        APP_ERROR_CHECK(max30102_init(&hr, &HR_TWIM));
+
+        // Optional: confirm ID
+        uint8_t id = 0;
+        if (max30102_read_part_id(&hr, &id) == NRF_SUCCESS) {
+        NRF_LOG_INFO("MAX30102 PART ID: 0x%02X (expect 0x15)", id);
+        }
+
+        APP_ERROR_CHECK(max30102_soft_reset(&hr));
+        nrf_delay_ms(5);
+
+        // Keep SR=100 Hz, PW=411us (code 3), but increase ADC range to max (code 3)
+        APP_ERROR_CHECK(max30102_config_spo2(&hr, /*sr_hz=*/100, /*pw_code=*/3, /*adc_range_code=*/3));
+
+        // Lower LED currents a lot to avoid clipping (0x10 ≈ 3.2 mA)
+        // Try ~8 mA first
+        APP_ERROR_CHECK(max30102_set_led_currents(&hr, 0x30, 0x30));  // (IR, RED)
+
+        // If IR/RED still < 30k → try 0x40
+        // If IR/RED start to approach 0x3FFFF → back down (or keep range=3 and lower current)
+        // If IR/RED still < 30k → try 0x40
+        // If IR/RED start to approach 0x3FFFF → back down (or keep range=3 and lower current)
+
+
+
+        // Enter SPO2 mode now so samples are produced
+        APP_ERROR_CHECK(max30102_set_mode_spo2(&hr));
+
+        // FIFO: avg=4, rollover OFF, A_FULL≈16 samples
+        APP_ERROR_CHECK(max30102_fifo_setup(&hr, /*sample_avg=*/4, /*roll_over=*/false, /*fifo_afull=*/0x0F));
+        APP_ERROR_CHECK(max30102_fifo_reset(&hr));
+
+        // Enable PPG_RDY only for now (simpler)
+        APP_ERROR_CHECK(max30102_enable_interrupts(&hr, /*data_ready=*/true, /*alc_ovf=*/false, /*prox=*/false, /*die_temp=*/false));
+
+        // Clear any latched IRQs so INT starts clean
+        (void)max30102_clear_interrupts(&hr);
+
+        // Optional: toss first few samples (settle)
+        for (int i = 0; i < 8; i++) {
+        max30102_sample_t dummy;
+        (void)max30102_read_fifo_sample(&hr, &dummy);
+        }
+
+        // BPM estimator state
+        max30102_bpm_init(&hr);
+
+        // (optional) quick readback of key regs
+        uint8_t r=0;
+        max30102_read_reg(&hr, MAX30102_REG_MODE_CONFIG, &r);  NRF_LOG_INFO("MODE=0x%02X", r);
+        max30102_read_reg(&hr, MAX30102_REG_SPO2_CONFIG, &r);  NRF_LOG_INFO("SPO2_CFG=0x%02X", r);
+        max30102_read_reg(&hr, MAX30102_REG_FIFO_CONFIG, &r);  NRF_LOG_INFO("FIFO_CFG=0x%02X", r);
+        max30102_read_reg(&hr, MAX30102_REG_INT_ENABLE1, &r);  NRF_LOG_INFO("INT_EN1=0x%02X", r);
+
+
+    //Hr Sensor Config END
+
+      m95_init();
+
+      if (!m95_power_on()) {
+          NRF_LOG_ERROR("M95: power-on failed");
+          // If you're inside int main(void):
+          // return 0;          // or: for(;;) { nrf_delay_ms(1000); }
+          // If you're inside a void init function:
+          // return;
+      }
+
+      // Simple AT smoke test
+      m95_send_cmd("AT");
+      m95_send_cmd("ATE0");        // echo off
+      m95_send_cmd("ATI");         // identify
+      m95_send_cmd("AT+CPIN?");    // SIM state
+      m95_send_cmd("AT+CSQ");      // signal
+      m95_send_cmd("AT+CREG=2");   // URCs on
+      m95_send_cmd("AT+CREG?");    // registration
+
+      // Drain replies for ~5s (500 * 10ms)
+      char ln[192];
+      for (int i = 0; i < 500; ++i) {
+          while (m95_service()) {
+              if (m95_get_line(ln, sizeof ln)) {
+                  NRF_LOG_INFO("M95> %s", nrf_log_push(ln));
+              }
+          }
+          nrf_delay_ms(10);
+      }
+
+
+ /*   
+      m95_init();
+      if (!m95_power_on()) {
+          NRF_LOG_ERROR("M95 power-on failed");
+      } else {
+        (void)m95_send_cmd("AT");   // first ping at 9600
+  nrf_delay_ms(50);
+          // basic probe (non-blocking)
+          (void)m95_send_cmd("ATE0");     // echo off
+          (void)m95_send_cmd("ATI");      // ID
+          (void)m95_send_cmd("AT+CPIN?"); // SIM?
+          (void)m95_send_cmd("AT+CSQ");   // RSSI
+          (void)m95_send_cmd("AT+CREG?"); // network reg
+            }
+  
+        // after the block where you send ATE0/ATI/CPIN/CSQ/CREG
+        uint32_t until_ms = 1500;   // drain for ~1.5 s
+        uint32_t start = app_timer_cnt_get();
+        while ( ( (app_timer_cnt_get() - start) * 1000ULL / 32768ULL ) < until_ms ) {
+            m95_poll_lines();
+            nrf_delay_ms(5);
+        }
+*/
 
     // Enter main loop.
     for (;;)
     {
-        __WFE();       // Wait for events
+        // Service GPS driver: parses internally, only returns true on a NEW valid fix
+        // Service GPS: parse any complete NMEA line framed by the ISR.
+        if (gps_service())
+        {
+            gps_packet_t fix;
+            if (gps_get_fix(&fix))
+            {
+                if (fix.isValid)
+                {
+                    log_fix(&fix);
+                }
+                else
+                {
+                    NRF_LOG_WARNING("GPS fix invalid");
+                }
+            }
+        }
+        else{
+       // NRF_LOG_WARNING("GPS fix invalid");
+       // gps_debug_raw();
+        }
 
-      // Start execution.
-     //  NRF_LOG_INFO("Hear Beat");
 
-    // Check for GPS updates
-  //  gps_status = gps_data_read(&my_gps_data);
-    if (line_ready) {
-    line_ready = false;
-    NRF_LOG_INFO("GPS raw: %s", line_buf);
+        int16_t x,y,z;
+        if (lis3dh_read_xyz_mg(&x,&y,&z)) {
+            NRF_LOG_INFO("ACC mg: X=%d Y=%d Z=%d", x,y,z);
+        } else {
+            NRF_LOG_ERROR("ACC read failed");
+        }
 
-    status_t status = gps_parse(line_buf, &my_gps_data);
-    if (status == success && my_gps_data.isValid) {
-        NRF_LOG_INFO("GPS Parsed: Lat %d.%02d, Lon %d.%02d",
-                     my_gps_data.lat_degrees, my_gps_data.lat_minutes,
-                     my_gps_data.long_degrees, my_gps_data.long_minutes);
-    } else {
-        NRF_LOG_ERROR("GPS Data invalid");
-    }
-}
-    if (gps_status == success)
-    {
-        NRF_LOG_INFO("GPS Latitude: %f, Longitude: %f", my_gps_data.lat, my_gps_data.lon);
-    }
+
+        // after battery_adc_init(), anywhere you print VBAT:
+        uint16_t vbat_mv;
+        if (battery_read_mv(&vbat_mv)) {
+            uint8_t pct = battery_percent_from_mv(vbat_mv);
+            NRF_LOG_INFO("VBAT = %u mV (%u%%)", vbat_mv, pct);
+        }
+
+
+        // HR Sensor
+
+          if (hr_int_is_asserted()) {
+              (void)max30102_clear_interrupts(&hr);            // releases INT latch
+              uint8_t n = max30102_fifo_sample_count(&hr);     // how many complete samples?
+              for (uint8_t i = 0; i < n; i++) {
+                  max30102_sample_t s;
+                  if (max30102_read_fifo_sample(&hr, &s) != NRF_SUCCESS) break;
+
+                  uint16_t bpm;
+                  if (max30102_bpm_update(&hr, s.ir, ms_now(), &bpm)) {
+                      NRF_LOG_INFO("BPM ~ %u", bpm);
+                  }
+                  if ((i & 0x03) == 0) {
+                      NRF_LOG_INFO("IR=%lu RED=%lu", (unsigned long)s.ir, (unsigned long)s.red);
+                  }
+              }
+          }
+
+
+      // ~50 Hz polling is fine for 100 Hz sensor
+        nrf_delay_ms(20);
+
+
+        //HR Sensor
+
+  //      m95_app_service();  // drains URCs / advances state
+
+  //    if (!ran_smoke && m95_app_ready()) {
+   //       ran_smoke = true;
+   //       m95_quick_selftest();
+   //   }
+
+  // m95_poll_lines();   // keep printing modem URCs and responses
+             nrf_delay_ms(1000);
+
         NRF_LOG_FLUSH();
 
         idle_state_handle();
