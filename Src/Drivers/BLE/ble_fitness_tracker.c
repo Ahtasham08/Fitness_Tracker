@@ -533,11 +533,6 @@ void BLE_Init(void)
 {
     ret_code_t err_code;
 #if DEBUG_BLE_OFF == 0
-#if DFU_DEBUG_ON == 0
-    // Initialize the async SVCI interface to bootloader before any interrupts are enabled.
-    err_code = ble_dfu_buttonless_async_svci_init();
-    APP_ERROR_CHECK(err_code);
-#endif
     timers_init();
     power_management_init();
     ble_stack_init();
@@ -557,26 +552,20 @@ void BLE_Init(void)
 void BLE_SendData(uint8_t *data, uint16_t length)
 {
     uint32_t err_code = 0;
-    char Packet[220] = {0};
 
     uint32_t i = 0;
-    // Generate the report
-    // GenerateReport(Packet);
-    //   snprintf(Packet, sizeof(Packet), "{\"count\":%d,\"time\":%d,\"tmp\":%.3f,\"Adc\":%.3f}",
-    //       ble_data.count, ble_data.timestamp, ble_data.temperature, ble_data.adc_sense);
 
     if (device_info.deviceConnected == true && device_info.isNotification == true) //&& (headerData.is_configured == true))
     {
 
         // Send the current packet
 #if DEBUG_LOG_VERBOSITY >= LOG_NORMAL
-        NRF_LOG_INFO("Sending Report %s length %d", Packet, strlen(Packet));
+        NRF_LOG_INFO("Sending Report %s length %d", (char*)data, length);
         NRF_LOG_FLUSH();
 #endif
         do
         {
-            uint16_t length = (uint16_t)strlen(Packet);
-            err_code = ble_nus_data_send(&m_nus, (uint8_t *)Packet, &length, m_conn_handle);
+            err_code = ble_nus_data_send(&m_nus, data, &length, m_conn_handle);
 
             if ((err_code != NRF_ERROR_INVALID_STATE) &&
                 (err_code != NRF_ERROR_RESOURCES) &&
