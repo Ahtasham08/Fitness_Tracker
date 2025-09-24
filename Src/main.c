@@ -60,6 +60,8 @@
 int main(void)
     {
     log_init();
+    
+    lfclk_init();
     NRF_LOG_INFO("Fitness Tracker started.");
     NRF_LOG_INFO("Firmware Version: %s", (uint32_t)FIRMWARE_VERSION);
     NRF_LOG_FLUSH();

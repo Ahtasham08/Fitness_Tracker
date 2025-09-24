@@ -532,7 +532,6 @@ void advertising_stop(void)
 void BLE_Init(void)
 {
     ret_code_t err_code;
-#if DEBUG_BLE_OFF == 0
     timers_init();
     power_management_init();
     ble_stack_init();
@@ -544,6 +543,8 @@ void BLE_Init(void)
 #if DEBUG_LOG_VERBOSITY == LOG_VERBOSE
     NRF_LOG_INFO("Debug logging for UART over RTT started.");
 #endif
+
+#if DEBUG_BLE_OFF == 0
     advertising_start();
 #endif
 }

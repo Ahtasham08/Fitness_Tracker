@@ -772,7 +772,6 @@ bool GSM_SendData(const uint8_t *data, size_t length)
 GSM_ErrorCode GSM_Init(void)
 {
 
-    lfclk_init();
     // Board power rails (if applicable)
     nrf_gpio_pin_set(PIN_GSM_PWR);
     nrf_gpio_pin_set(PIN_GSM_EMERG_OFF);

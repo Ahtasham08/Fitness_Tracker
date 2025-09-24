@@ -6,7 +6,7 @@
 #include "nrfx_timer.h"
 #include "nrf_libuarte_async.h"
 
-NRF_LIBUARTE_ASYNC_DEFINE(gsm_uarte, 0, 2, 0, NRF_LIBUARTE_PERIPHERAL_NOT_USED, 255, 5);
+NRF_LIBUARTE_ASYNC_DEFINE(gsm_uarte, 0, 2, 1, NRF_LIBUARTE_PERIPHERAL_NOT_USED, 255, 5);
 nrfx_uarte_t gps_uarte = NRFX_UARTE_INSTANCE(1);
 
 static uint8_t gsm_rx_buf[UART_RX_BUF_SIZE];

@@ -111,9 +111,9 @@
     </folder>
     <folder Name="Application">
       <file file_name="../../../main.c" />
-      <file file_name="../config/sdk_config.h" />
       <file file_name="../../../Drivers/boards_custom.h" />
       <file file_name="../../../Drivers/COMMON_CONFIG.h" />
+      <file file_name="../config/sdk_config.h" />
     </folder>
     <folder Name="nRF_Segger_RTT">
       <file file_name="../../../../external/segger_rtt/SEGGER_RTT.c" />
