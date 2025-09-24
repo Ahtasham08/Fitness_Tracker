@@ -369,7 +369,7 @@ static uint32_t log_skip(void)
     } while (true);
 
     uint32_t i;
-    for (i = 0; i < HEADER_SIZE; i++)
+                                                       for (i = 0; i < HEADER_SIZE; i++)
     {
         ((uint32_t*)&header)[i] = m_log_data.buffer[rd_idx++ & mask];
     }

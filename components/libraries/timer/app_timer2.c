@@ -317,6 +317,7 @@ static void on_compare_evt(drv_rtc_t const * const  p_instance)
 {
     if (mp_active_timer)
     {
+
         /* If assert fails it suggests that safe window should be increased. */
         ASSERT(app_timer_cnt_diff_compute(drv_rtc_counter_get(p_instance),
                                           drv_rtc_compare_get(p_instance, 0)) < APP_TIMER_SAFE_WINDOW);

@@ -1,0 +1,12 @@
+{
+    "files.associations": {
+        "common_config.h": "c",
+        "ble_fitness_tracker.h": "c",
+        "parser_fitness_tracker.h": "c",
+        "i2c_fitness_tracker.h": "c",
+        "gpio_fitness_tracker.h": "c",
+        "uart_fitness_tracker.h": "c",
+        "nrf_gpio.h": "c"
+    },
+    "cmake.sourceDirectory": "C:/Nordic/Fitness_tracker/external/mbedtls"
+}
