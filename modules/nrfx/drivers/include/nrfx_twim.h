@@ -40,7 +40,7 @@
 
 #ifndef NRFX_TWIM_H__
 #define NRFX_TWIM_H__
-
+#include "sdk_config.h"
 #include <nrfx.h>
 #include <nrfx_twi_twim.h>
 #include <hal/nrf_twim.h>

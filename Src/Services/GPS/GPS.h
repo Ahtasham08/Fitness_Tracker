@@ -6,6 +6,16 @@
  */
 
 
+#pragma once
+
+
+#include "nrf_gpio.h"
+#include "nrf_log.h"
+
+
+
+
+
 #ifndef DR_GPS_LC76F_H_
 #define DR_GPS_LC76F_H_
 
@@ -14,17 +24,9 @@
 #include <stdio.h>
 #include <stdarg.h>
 
-/* Macros */
-#define GPS_BAUD_RATE    u_buad_9600
-#define GNGGA_LENGTH 128
-#define GPS_READ_TIME_OUT   5000U
-#define UART_GPS_RCV_SIZE   2048U
-#define UART_GPS_TX_SIZE    2048U
-#define GPS_READ_SIZE       2048U
-#define FIXID_DATA_SIZE     82
-#define GPS_TRANSMIT_SIZE   64U
+#include "boards_custom.h"
 
-#define GPS_LPMC            "$PGKC051,0*37\r\n"
+
 
 typedef struct
 {
@@ -41,6 +43,9 @@ typedef struct
     uint16_t timeMinutes;                     /*time Minutes*/
     uint16_t timeSeconds;                     /*time Seconds*/
 
+
+    float speed_knots;
+    float course_deg;
 
     float heightOfGeoid;
     float altitude;
@@ -60,12 +65,12 @@ typedef struct
 
 }gps_packet_t;
 
-typedef enum {
+/*typedef enum {
     fail = 0,
     success = 1,
     pending = 2
 } status_t;
-
+*/
 
 
 typedef struct {
@@ -76,69 +81,14 @@ typedef struct {
     status_t rtv_gps_fixed_activity_flag;
 } ap_data_t;
 
-
-typedef enum
-{
-    gps_start=0,
-    gps_read_data,
-    gps_motion_distance_cal,
-    gps_geo_fence_distance_cal,
-    gps_low_pwr_mode,
-    gps_stop
-} gps_stages_uart;
-
-typedef enum
-{
-    gps_lpmc_send=0,
-    gps_lpmc_send_wait_responce,
-
-}gps_lpmc_t;
-
-typedef enum
-{
-    gps_write_tx=0,
-    gps_write_tx_complete,
-
-}gps_write_t;
-
-typedef enum
-{
-    gps_read_rx=0,
-    gps_read_rx_complete
-
-}gps_read_t;
-
-/** @brief This struct (gps_generic_info) is a generic internal structure used by
- * API to store relevant information about GPS driver.
- */
-typedef struct
-{
-    bool gps_init;
-    bool gps_reset_status;
-
-    uint8_t fix_state;
-    uint8_t error_count;
-    uint16_t old_rx_size;
-    uint8_t gps_uart_buffer[UART_GPS_RCV_SIZE];
-    uint8_t gps_uart_txbuffer[UART_GPS_TX_SIZE];
-    gps_stages_uart gps_stage;
-    gps_write_t gps_write;
-    gps_lpmc_t   gps_lpmc;
-    gps_read_t   gps_lc76f_read;
-
-} gps_generic_info;
-
-
-typedef enum {
-    GPS_TX_PENDING,
-    GPS_TX_SUCCESS,
-    GPS_TX_FAIL
-} gps_tx_status_t;
-
-
 extern ap_data_t ap_data;   // declare in header
 
 
+
+
+/* Macros */
+#define GPS_BAUD_RATE    u_buad_9600
+#define GNGGA_LENGTH 128
 // Make GPS data global so it persists
 // Declaration only
 extern gps_packet_t my_gps_data;
@@ -188,6 +138,21 @@ status_t gps_check_communication();
 
 void gps_init(void);
 
+
+
+
+
+
+bool gps_service(void);
+bool gps_get_fix(gps_packet_t *out);
+
+static uint8_t hex_nibble(char c);
+
+static bool nmea_checksum_ok(const char *s);
+
+ extern void log_fix(const gps_packet_t *fix);
+
+void gps_debug_raw(void);
 
 #endif
 

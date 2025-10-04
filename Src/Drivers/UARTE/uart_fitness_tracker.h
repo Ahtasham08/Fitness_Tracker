@@ -61,7 +61,7 @@ ret_code_t uarte_abort(uint8_t uart_type);
  * @param length Length of the buffer.
  * @return true if reception is successful, false otherwise.
  */
-bool uarte_receive(uint8_t *buffer, size_t length);
+bool uarte_receive(uint8_t uart_type,uint8_t *buffer, size_t length);
 
 /**
  * @brief Deinitialize the UARTE driver.

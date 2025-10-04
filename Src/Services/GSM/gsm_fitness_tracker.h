@@ -32,6 +32,7 @@ typedef enum {
     CMD_AT_IPR,
     CMD_AT_W,
     CMD_ATI,
+    CMD_AT_EGMR,
     CMD_AT_GSN,
     CMD_AT_CPIN,
     CMD_AT_CMEE,

@@ -12,19 +12,45 @@
 #define MINOR_VERSION 0
 #define BUILD_VERSION 0
 
+#ifndef APP_STATUS_T_DEFINED
+#define APP_STATUS_T_DEFINED
+typedef enum { fail = 0, success = 1, pending = 2 } status_t;
+#endif
+
+
+
 /* GPS UART pins */
 #define GPS_UART_TX 30
 #define GPS_UART_RX 31
 
-/* I2C pins */
-#define I2C_SDA_PIN 4
-#define I2C_SCL_PIN 5
 
 /* GPS control pins */
 #define PIN_GPS_PWR   15
 #define PIN_GPS_RST   23
 #define PIN_GPS_VBKUP 16
 
+
+// I2C / LIS3DHTR pins
+#define BOARD_I2C0_SCL_PIN    26   // P0.26 on your schematic
+#define BOARD_I2C0_SDA_PIN    27   // P0.27 on your schematic
+#define LIS3DH_CS_PIN     -1   // -1 means chip select is tied high (I2C mode)
+
+
+// Battery measurement
+#define PIN_BAT_EN           12            // P0.12 → BAT-EN
+// SAADC input for BAT-ADC (P0.02 / AIN0)
+#define BATTERY_ADC_INPUT    NRF_SAADC_INPUT_AIN0
+
+// Divider values (ohms)
+#define BAT_R_TOP_OHMS       3000.0f       // R14
+#define BAT_R_BOTTOM_OHMS    8870.0f       // R16
+
+
+//HR pins
+// ---------- Heart-rate sensor (MAX30102) ----------
+#define HR_I2C_SCL_PIN   NRF_GPIO_PIN_MAP(1,10)   // I2C3_SCL
+#define HR_I2C_SDA_PIN   NRF_GPIO_PIN_MAP(0,3)    // I2C3_SDA
+#define HR_INT_PIN       NRF_GPIO_PIN_MAP(1,11)   // HR-INT (active low)
 /* GSM UART pins */
 #define GSM_UART_TX NRF_GPIO_PIN_MAP(1,14)
 #define GSM_UART_RX NRF_GPIO_PIN_MAP(1,15)
@@ -79,5 +105,6 @@ typedef struct device_info_s {
 } device_info_t;
 
 extern device_info_t device_info;
+
 
 #endif // BOARDS_CUSTOM_H

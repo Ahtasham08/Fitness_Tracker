@@ -51,6 +51,7 @@ static const gsm_cmd_t gsm_commands[CMD_COUNT] = {
     // Save settings
     [CMD_AT_W] = {"AT&W\r", "OK", 1200},
     [CMD_ATI] = {"ATI\r", "OK", 1200},
+    [CMD_AT_EGMR] = {"AT+EGMR=0,7,\"%s\"\r", "OK", 2000}, // Set IMEI (if allowed)
     [CMD_AT_GSN] = {"AT+GSN\r", "OK", 1200},
     [CMD_AT_CPIN] = {"AT+CPIN?\r", "+CPIN: READY", 1500},
     [CMD_AT_CREG_Q] = {"AT+CREG?\r", "+CREG:", 1500},
@@ -819,6 +820,21 @@ GSM_ErrorCode GSM_Init(void)
         NRF_LOG_FLUSH();
         NRF_LOG_INFO("GSM Module Initialization Started...");
         NRF_LOG_FLUSH();
+
+        if(imei_str[0] = '8')
+        {
+            GSM_SendCommand_str(CMD_AT_EGMR, "1,7,\"357039634919317\"");
+            GSM_SendCommand(CMD_AT_GSN);
+
+            char imei_str[32];
+            snprintf(imei_str, sizeof(imei_str), "%" PRIu64, (uint64_t)device_info.gsm.imei);
+            NRF_LOG_INFO("GSM Module IMEI: %s", nrf_log_push(imei_str));
+            NRF_LOG_INFO("GSM Module Model: %s", device_info.gsm.model);
+            NRF_LOG_INFO("GSM Module Revision: %s", device_info.gsm.Revision);
+            NRF_LOG_FLUSH();
+        }
+
+        
         // Full init sequence
 
         if (!GSM_SendCommand(CMD_AT_CPIN))

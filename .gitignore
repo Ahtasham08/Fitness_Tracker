@@ -2,3 +2,4 @@
 *.d
 /Src/pca10056/s140/ses/Output/
 *.bak
+build/

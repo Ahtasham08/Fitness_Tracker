@@ -106,7 +106,7 @@ static void gps_uart_event_handler(nrfx_uarte_event_t const *p_event, void *p_co
         if (p_event->data.rxtx.bytes < UART_RX_BUF_SIZE)
             gps_rx_buf[p_event->data.rxtx.bytes] = '\0';
         NRF_LOG_INFO("%s", (uint32_t)gps_rx_buf);
-
+        callback_gps(gps_rx_buf, p_event->data.rxtx.bytes);
         // Re-start reception for next data
         APP_ERROR_CHECK(nrfx_uarte_rx(&gps_uarte, gps_rx_buf, UART_RX_BUF_SIZE));
         break;
@@ -157,6 +157,8 @@ void gsm_uart_init(void (*callback)(char *, uint8_t))
 // Init GPS UARTE
 void gps_uart_init(void (*callback)(char *, uint8_t))
 {
+    callback_gps = callback;
+    memset(gps_rx_buf, 0, sizeof(gps_rx_buf));
     nrfx_uarte_config_t gps_config = {
         .pseltxd = GPS_UART_TX,
         .pselrxd = GPS_UART_RX,
@@ -171,7 +173,7 @@ void gps_uart_init(void (*callback)(char *, uint8_t))
     ret_code_t err_code = nrfx_uarte_init(&gps_uarte, &gps_config, gps_uart_event_handler);
     APP_ERROR_CHECK(err_code);
 
-    err_code = nrfx_uarte_rx(&gps_uarte, gps_rx_buf, 2);
+    err_code = nrfx_uarte_rx(&gps_uarte, gps_rx_buf, sizeof(gps_rx_buf)-1);
     APP_ERROR_CHECK(err_code);
 
     NRF_LOG_INFO("GPS UART initialized");
@@ -254,7 +256,27 @@ ret_code_t uarte_transmit(uint8_t uart_type, const uint8_t *p_data, size_t lengt
  * @param length Length of the buffer.
  * @return true if reception is successful, false otherwise.
  */
-bool uarte_receive(uint8_t *buffer, size_t length);
+bool uarte_receive(uint8_t uart_type,uint8_t *buffer, size_t length)
+{
+    ret_code_t err_code = NRFX_SUCCESS;
+
+    switch (uart_type)
+    {
+    case GSM_UART:
+        // err_code = nrf_libuarte_async_rx(&gsm_uarte, buffer, length);
+        // APP_ERROR_CHECK(err_code);
+        break;
+    case GPS_UART:
+        err_code = nrfx_uarte_rx(&gps_uarte, buffer, length);
+        APP_ERROR_CHECK(err_code);
+        break;
+    default:
+        break;
+    }
+
+    return (err_code == NRFX_SUCCESS);
+
+}
 
 
 
@@ -276,17 +298,17 @@ void uarte_deinit(uint8_t uart_type)
     }
 }
 
-void lfclk_init(void)
-{
-    ret_code_t err_code = nrf_drv_clock_init();
-    APP_ERROR_CHECK(err_code);
+//void lfclk_init(void)
+//{
+//    ret_code_t err_code = nrf_drv_clock_init();
+//    APP_ERROR_CHECK(err_code);
 
-    nrf_drv_clock_lfclk_request(NULL);
+//    nrf_drv_clock_lfclk_request(NULL);
 
-    // Wait for LFCLK to start
-    while (!nrf_drv_clock_lfclk_is_running())
-    {
-        // Wait
-    }
-    NRF_LOG_INFO("LFCLK started");
-}
+//    // Wait for LFCLK to start
+//    while (!nrf_drv_clock_lfclk_is_running())
+//    {
+//        // Wait
+//    }
+//    NRF_LOG_INFO("LFCLK started");
+//}
