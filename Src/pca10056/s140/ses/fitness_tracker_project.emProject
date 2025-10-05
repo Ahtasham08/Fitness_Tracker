@@ -71,11 +71,11 @@
       <file file_name="../../../../external/cJSON/cJSON.c" />
       <file file_name="../../../../components/libraries/fstorage/nrf_fstorage.c" />
       <file file_name="../../../../components/libraries/fstorage/nrf_fstorage_sd.c" />
-      <file file_name="../../../../../nRF5_SDK_17.1.0_ddde560/components/libraries/libuarte/nrf_libuarte_async.c" />
-      <file file_name="../../../../../nRF5_SDK_17.1.0_ddde560/components/libraries/libuarte/nrf_libuarte_drv.c" />
-      <file file_name="../../../../../nRF5_SDK_17.1.0_ddde560/components/libraries/queue/nrf_queue.c" />
       <file file_name="../../../../components/libraries/timer/app_timer2.c" />
       <file file_name="../../../../components/libraries/timer/drv_rtc.c" />
+      <file file_name="../../../../components/libraries/libuarte/nrf_libuarte_async.c" />
+      <file file_name="../../../../components/libraries/libuarte/nrf_libuarte_drv.c" />
+      <file file_name="../../../../components/libraries/queue/nrf_queue.c" />
     </folder>
     <folder Name="None">
       <file file_name="../../../../modules/nrfx/mdk/ses_startup_nrf52840.s" />

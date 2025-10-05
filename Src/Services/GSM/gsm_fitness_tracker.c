@@ -16,6 +16,8 @@
 #include <stdbool.h>
 #include <stdio.h>
 
+
+APP_TIMER_DEF(timeout_timer);
 /* --------------------------------------------------------------------------
  * Goal: make this file self-sufficient for M95 bring-up while reusing the
  * UART layer from uart_fitness_tracker.c. Adds:
@@ -115,6 +117,14 @@ static const gsm_cmd_t gsm_commands[CMD_COUNT] = {
     [CMD_AT_QIDEACT] = {"AT+QIDEACT\r", "DEACT OK", 10000},
     [CMD_AT_QPOWD] = {"AT+QPOWD=1\r", "NORMAL POWER DOWN", 12000},
 };
+
+
+void timeout_handler(void *p_context) {
+    // Code to execute on timeout
+    response_received = true;
+     s_flag_error = true;
+
+}
 
 static inline void gsm_flags_clear(void)
 {
@@ -525,13 +535,15 @@ static void gsm_scan_chunk(const uint8_t *p, size_t n)
 
 void process_gsm_response(char *response, uint8_t length)
 {
+    ret_code_t err ;
     if (!response || length <= 1)
         return;
-
+    err = app_timer_stop(timeout_timer);
+    APP_ERROR_CHECK(err);   // safe even if it wasn’t running
     // Log trimmed chunk
     NRF_LOG_INFO("GSM Response: %s", response);
     NRF_LOG_FLUSH();
-
+    
     gsm_scan_chunk((const uint8_t *)response, length);
 
     response_received = true; // legacy; some older code may still gate on this
@@ -604,11 +616,11 @@ static void pwrkey_pulse_ms(uint32_t ms)
 static bool m95_power_on(void)
 {
     uint8_t count = 0;
-    device_info.gsm.is_powered_on = true;
+    //device_info.gsm.is_powered_on = true;
     last_cmd_index = CMD_POWER_ON;
     nrf_delay_ms(100);     // VBAT settle (handled by board power-up)
     pwrkey_pulse_ms(1200); // ON requires >1 s LOW
-    while (count < 50)
+    while (count < 2)
     {
         count++;
         if (device_info.gsm.is_powered_on != true)
@@ -687,6 +699,8 @@ bool GSM_SendCommand(uint16_t cmd_index)
     NRF_LOG_INFO("expect: %s", nrf_log_push(gsm_cmd_tracker.expect ? gsm_cmd_tracker.expect : "<any>"));
     NRF_LOG_INFO("timeout: %u ms", (unsigned)gsm_cmd_tracker.timeout_ms);
     NRF_LOG_FLUSH();
+    
+    app_timer_start(timeout_timer, APP_TIMER_TICKS(gsm_cmd_tracker.timeout_ms), NULL); // 1 second
     bool ok = gsm_send_expect(gsm_cmd_tracker.cmd, gsm_cmd_tracker.expect, gsm_cmd_tracker.timeout_ms);
     if (!ok)
     {
@@ -779,7 +793,7 @@ GSM_ErrorCode GSM_Init(void)
 
     // Init UART for GSM with our callback
     gsm_uart_init(process_gsm_response);
-
+    app_timer_create(&timeout_timer, APP_TIMER_MODE_SINGLE_SHOT, timeout_handler);
     // Clean power on and autobaud
     if (GSM_CheckModule())
     {
